@@ -8,6 +8,9 @@
 ```
 # Mars(阿瑞斯)
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/Fengxq2014/mars)](https://goreportcard.com/report/github.com/Fengxq2014/mars)
+[![GoDoc](https://godoc.org/github.com/Fengxq2014/mars?status.svg)](https://godoc.org/github.com/Fengxq2014/mars)
+
 一个分布式、高性能的雪花id生成器
 
 ## 依赖
