@@ -433,7 +433,7 @@ func (m *mars) initialize() error {
 		client := redis.NewClient(&redis.Options{
 			Addr:     s,
 			Password: m.redisPasswd,
-			DB:       0,  // use default DB
+			DB:       0, // use default DB
 		})
 		s, err := client.Get("node").Result()
 		client.Close()

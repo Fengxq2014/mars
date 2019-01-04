@@ -33,14 +33,14 @@ func init() {
 
 func main() {
 	flag.Parse()
-	if httpAddr == ""{
+	if httpAddr == "" {
 		err := godotenv.Load()
 		if err != nil {
 			panic("http address in empty and .env file not found")
 		}
 		httpAddr = getEnv("MARS_HTTP_ADDR")
 	}
-	if tcpAddr == ""{
+	if tcpAddr == "" {
 		err := godotenv.Load()
 		if err != nil {
 			panic("tcp address in empty and .env file not found")
@@ -62,9 +62,9 @@ func main() {
 		TcpAddr:       tcpAddr,
 		Log:           logger,
 		EtcdEndPoints: "localhost:23790",
-		RedisPasswd:"123",
-		HttpName:"user",
-		HttpPasswd:"pwd",
+		RedisPasswd:   "123",
+		HttpName:      "user",
+		HttpPasswd:    "pwd",
 	}
 
 	m := mars.New(cfg)

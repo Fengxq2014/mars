@@ -23,7 +23,7 @@ func (amw *authenticationMiddleware) Check(authValue string) (string, bool) {
 	if authValue == "" {
 		return "", false
 	}
-	for i, v := range amw.tokenUsers{
+	for i, v := range amw.tokenUsers {
 		if v == authValue {
 			return i, true
 		}
