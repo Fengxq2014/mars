@@ -46,3 +46,23 @@
 ## 节点状态流程图
 [![image.png](https://i.postimg.cc/jdtXdGKv/image.png)](https://postimg.cc/z32Wx2yR)
 
+## 性能
+### http
+
+```bash
+Running 30s test @ http://localhost:8081/id
+  16 threads and 400 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.99ms  782.98us  10.69ms   78.32%
+    Req/Sec     4.91k   632.05     8.32k    85.78%
+  Latency Distribution
+     50%    5.15ms
+     75%    5.45ms
+     90%    5.77ms
+     99%    6.43ms
+  2348646 requests in 30.10s, 374.05MB read
+  Socket errors: connect 0, read 237, write 0, timeout 0
+  Non-2xx or 3xx responses: 2348646
+Requests/sec:  78021.13
+Transfer/sec:     12.43MB
+```
