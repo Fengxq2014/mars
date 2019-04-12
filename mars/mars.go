@@ -49,6 +49,7 @@ type mars struct {
 
 type MarsConfig struct {
 	HttpAddr      string
+	HttpTimeOut   time.Duration
 	TcpAddr       string
 	Log           *log.Logger
 	EtcdEndPoints string
@@ -62,7 +63,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.0.0"
+	version     = "1.0.1"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -76,20 +77,23 @@ func New(cfg *MarsConfig) *mars {
 				TcpAddr:       ":8089",
 				Log:           log.New(),
 				EtcdEndPoints: "localhost:23790",
+				HttpTimeOut:   10 * time.Second,
 			}
 		}
 		r := mux.NewRouter()
-		amw := authenticationMiddleware{}
-		amw.Populate(cfg.HttpName, cfg.HttpPasswd)
-		r.Use(amw.Middleware)
+		if cfg.HttpName != "" && cfg.HttpPasswd != "" {
+			amw := authenticationMiddleware{}
+			amw.Populate(cfg.HttpName, cfg.HttpPasswd)
+			r.Use(amw.Middleware)
+		}
 
 		r.HandleFunc("/id", GetID).Methods("GET")
 		r.HandleFunc("/info/{id:[0-9]+}", GetIDInfo).Methods("GET")
 		s := &http.Server{
 			Addr:           cfg.HttpAddr,
 			Handler:        r,
-			ReadTimeout:    10 * time.Second,
-			WriteTimeout:   10 * time.Second,
+			ReadTimeout:    cfg.HttpTimeOut,
+			WriteTimeout:   cfg.HttpTimeOut,
 			MaxHeaderBytes: 1 << 20,
 		}
 		m = &mars{
@@ -217,26 +221,26 @@ func (m *mars) initRedisSrv() {
 		}
 	}))
 	m.redisSrv.HandleFunc("sentinel", func(w resp.ResponseWriter, c *resp.Command) {
-		cli := redeo.GetClient(c.Context())
-		value := cli.Context().Value(ctxAuthOK{})
-		b, ok := value.(bool)
-		if ok && b {
-			if c.Arg(0).String() == "get-master-addr-by-name" {
-				//_, s := m.isLeader()
-				addr, err := net.ResolveTCPAddr("tcp", m.tcpAddr)
-				if err != nil {
-					w.AppendError(err.Error())
-					return
-				}
-				w.AppendArrayLen(2)
-				w.AppendBulkString(addr.IP.String())
-				w.AppendBulkString(strconv.Itoa(addr.Port))
-			} else {
-				w.AppendError(redeo.UnknownCommand(c.Name))
+		//cli := redeo.GetClient(c.Context())
+		//value := cli.Context().Value(ctxAuthOK{})
+		//b, ok := value.(bool)
+		//if ok && b {
+		if c.Arg(0).String() == "get-master-addr-by-name" {
+			//_, s := m.isLeader()
+			addr, err := net.ResolveTCPAddr("tcp", m.tcpAddr)
+			if err != nil {
+				w.AppendError(err.Error())
+				return
 			}
+			w.AppendArrayLen(2)
+			w.AppendBulkString(addr.IP.String())
+			w.AppendBulkString(strconv.Itoa(addr.Port))
 		} else {
-			w.AppendError("NOAUTH Authentication required.")
+			w.AppendError(redeo.UnknownCommand(c.Name))
 		}
+		//} else {
+		//	w.AppendError("NOAUTH Authentication required.")
+		//}
 	})
 	m.redisSrv.Handle("subscribe", broker.Subscribe())
 }

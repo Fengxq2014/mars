@@ -5,7 +5,6 @@ import (
 	"github.com/Fengxq2014/mars/mars"
 	"github.com/joho/godotenv"
 	log "github.com/sirupsen/logrus"
-	"net"
 	"os"
 	"time"
 )
@@ -14,8 +13,11 @@ var (
 	dialTimeout = 5 * time.Second
 	httpAddr    string
 	tcpAddr     string
-
-	TcpAddr *net.TCPAddr
+	etcdAddrs   string
+	verbose     bool
+	redisPasswd string
+	httpName    string
+	httpPasswd  string
 )
 
 func getEnv(key string) string {
@@ -29,26 +31,27 @@ func getEnv(key string) string {
 func init() {
 	flag.StringVar(&httpAddr, "http", "", "http address to listen on")
 	flag.StringVar(&tcpAddr, "tcp", "", "tcp address to listen on")
+	flag.StringVar(&etcdAddrs, "etcd", "", "etcd addrs")
+	flag.BoolVar(&verbose, "v", false, "verbose log")
+	flag.StringVar(&redisPasswd, "redisPasswd", "", "redis auth pass word")
+	flag.StringVar(&httpName, "httpName", "", "http basic auth name")
+	flag.StringVar(&httpPasswd, "httpPasswd", "", "http basic auth pass word")
 }
 
 func main() {
 	flag.Parse()
-	if httpAddr == "" {
-		err := godotenv.Load()
-		if err != nil {
-			panic("http address in empty and .env file not found")
-		}
-		httpAddr = getEnv("MARS_HTTP_ADDR")
-	}
-	if tcpAddr == "" {
-		err := godotenv.Load()
-		if err != nil {
-			panic("tcp address in empty and .env file not found")
-		}
-		httpAddr = getEnv("MARS_TCP_ADDR")
-	}
+	getValueFromEnv(&httpAddr, "MARS_HTTP_ADDR")
+	getValueFromEnv(&tcpAddr, "MARS_TCP_ADDR")
+	getValueFromEnv(&etcdAddrs, "MARS_ETCD_ENDPOINTS")
+	getValueFromEnv(&redisPasswd, "MARS_TCP_PASSWD")
+	getValueFromEnv(&httpName, "MARS_HTTP_NAME")
+	getValueFromEnv(&httpPasswd, "MARS_HTTP_PASSWD")
 	logger := log.New()
-	logger.SetLevel(log.InfoLevel)
+	if verbose {
+		logger.SetLevel(log.DebugLevel)
+	} else {
+		logger.SetLevel(log.InfoLevel)
+	}
 	logger.SetOutput(os.Stdout)
 	logger.SetReportCaller(true)
 	logger.SetFormatter(&log.TextFormatter{
@@ -61,13 +64,24 @@ func main() {
 		HttpAddr:      httpAddr,
 		TcpAddr:       tcpAddr,
 		Log:           logger,
-		EtcdEndPoints: "localhost:23790",
-		RedisPasswd:   "123",
-		HttpName:      "user",
-		HttpPasswd:    "pwd",
+		EtcdEndPoints: etcdAddrs,
+		RedisPasswd:   redisPasswd,
+		HttpName:      httpName,
+		HttpPasswd:    httpPasswd,
+		HttpTimeOut:   dialTimeout,
 	}
 
 	m := mars.New(cfg)
 	m.StartTcp()
 	m.StartHttp()
+}
+
+func getValueFromEnv(key *string, envKey string) {
+	if *key == "" {
+		err := godotenv.Load()
+		if err != nil {
+			panic(envKey + " is empty and .env file not found")
+		}
+		*key = getEnv(envKey)
+	}
 }
