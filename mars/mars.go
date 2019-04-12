@@ -63,7 +63,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.0.1"
+	version     = "1.0.2"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -226,8 +226,8 @@ func (m *mars) initRedisSrv() {
 		//b, ok := value.(bool)
 		//if ok && b {
 		if c.Arg(0).String() == "get-master-addr-by-name" {
-			//_, s := m.isLeader()
-			addr, err := net.ResolveTCPAddr("tcp", m.tcpAddr)
+			_, s := m.isLeader()
+			addr, err := net.ResolveTCPAddr("tcp", s)
 			if err != nil {
 				w.AppendError(err.Error())
 				return
