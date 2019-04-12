@@ -43,7 +43,7 @@ func main() {
 	getValueFromEnv(&httpAddr, "MARS_HTTP_ADDR")
 	getValueFromEnv(&tcpAddr, "MARS_TCP_ADDR")
 	getValueFromEnv(&etcdAddrs, "MARS_ETCD_ENDPOINTS")
-	getValueFromEnv(&redisPasswd, "MARS_TCP_PASSWD")
+	getValueFromEnv(&redisPasswd, "MARS_REDIS_PASSWD")
 	getValueFromEnv(&httpName, "MARS_HTTP_NAME")
 	getValueFromEnv(&httpPasswd, "MARS_HTTP_PASSWD")
 	logger := log.New()
