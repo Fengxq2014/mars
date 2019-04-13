@@ -63,7 +63,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.0.2"
+	version     = "1.0.3"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -189,6 +189,33 @@ func (m *mars) initRedisSrv() {
 			client := redeo.GetClient(c.Context())
 			client.SetContext(context.WithValue(client.Context(), ctxAuthOK{}, true))
 			w.AppendOK()
+		} else {
+			w.AppendError("NOAUTH Authentication required.")
+		}
+	})
+	m.redisSrv.HandleFunc("hgetall", func(w resp.ResponseWriter, c *resp.Command) {
+		cli := redeo.GetClient(c.Context())
+		value := cli.Context().Value(ctxAuthOK{})
+		b, ok := value.(bool)
+		if ok && b {
+			if c.ArgN() != 1 {
+				w.AppendError(redeo.WrongNumberOfArgs(c.Name))
+				return
+			} else {
+				id := c.Arg(0).String()
+				info, err := m.getIdInfo(id)
+				if err != nil {
+					w.AppendError(err.Error())
+					return
+				}
+				w.AppendArrayLen(6)
+				w.AppendBulkString("time")
+				w.AppendBulkString(info.Time)
+				w.AppendBulkString("step")
+				w.AppendBulkString(info.Step)
+				w.AppendBulkString("node")
+				w.AppendBulkString(info.Node)
+			}
 		} else {
 			w.AppendError("NOAUTH Authentication required.")
 		}
@@ -484,4 +511,32 @@ func (m *mars) chanFuc() {
 			}
 		}
 	}
+}
+
+type IdInfo struct {
+	Time string
+	Step string
+	Node string
+}
+
+func (m *mars) getIdInfo(id string) (IdInfo, error) {
+	res := IdInfo{}
+	i, err := strconv.Atoi(id)
+	if err != nil {
+		return res, errors.New(fmt.Sprintf("%s 不是合法的id", id))
+	}
+	response, err := m.etcdCli.Get(context.Background(), workerKey+"/"+strconv.FormatInt(m.gen.GetNode(int64(i)), 10))
+	if err != nil {
+		return res, err
+	}
+	var node string
+	if response.Count < 1 {
+		node = ""
+	} else {
+		node = string(response.Kvs[0].Value)
+	}
+	res.Time = m.gen.GetTime(int64(i))
+	res.Step = strconv.FormatInt(m.gen.GetStep(int64(i)), 10)
+	res.Node = node
+	return res, nil
 }

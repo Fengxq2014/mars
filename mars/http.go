@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"net/http"
-	"strconv"
 )
 
 type authenticationMiddleware struct {
@@ -63,22 +62,16 @@ func GetID(w http.ResponseWriter, r *http.Request) {
 
 func GetIDInfo(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	i, err := strconv.Atoi(vars["id"])
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "%s 不是合法的id", vars["id"])
-		return
-	}
-	response, err := m.etcdCli.Get(context.Background(), workerKey+"/"+strconv.FormatInt(m.gen.GetNode(int64(i)), 10))
+	info, err := m.getIdInfo(vars["id"])
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(w, err)
 		return
 	}
 	res := make(map[string]string)
-	res["time"] = m.gen.GetTime(int64(i))
-	res["step"] = strconv.FormatInt(m.gen.GetStep(int64(i)), 10)
-	res["node"] = string(response.Kvs[0].Value)
+	res["time"] = info.Time
+	res["step"] = info.Step
+	res["node"] = info.Node
 	bytes, err := json.Marshal(res)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
