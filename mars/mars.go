@@ -8,7 +8,6 @@ import (
 	"github.com/bsm/redeo"
 	"github.com/bsm/redeo/resp"
 	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/clientv3/clientv3util"
 	"github.com/coreos/etcd/clientv3/concurrency"
 	"github.com/coreos/etcd/mvcc/mvccpb"
 	"github.com/go-redis/redis"
@@ -37,7 +36,6 @@ type mars struct {
 	etcdCli        *clientv3.Client
 	mu             sync.RWMutex
 	gen            *generator.Generator
-	keepChan       chan bool
 	campChan       chan bool
 	ticker         *time.Ticker
 	etcdKeyTimeOut int64
@@ -45,6 +43,7 @@ type mars struct {
 	redisPasswd    string
 	httpName       string
 	httpPasswd     string
+	session        *concurrency.Session
 }
 
 type MarsConfig struct {
@@ -63,7 +62,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.0.3"
+	version     = "1.1.0"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -103,7 +102,6 @@ func New(cfg *MarsConfig) *mars {
 			redisSrv:       redeo.NewServer(nil),
 			etcdCli:        etcdsrv.New(cfg.EtcdEndPoints).Cli,
 			log:            cfg.Log,
-			keepChan:       make(chan bool, 1),
 			campChan:       make(chan bool, 1),
 			ticker:         time.NewTicker(time.Second * 7),
 			etcdKeyTimeOut: 10,
@@ -111,6 +109,11 @@ func New(cfg *MarsConfig) *mars {
 			httpName:       cfg.HttpName,
 			httpPasswd:     cfg.HttpPasswd,
 		}
+		session, err := concurrency.NewSession(m.etcdCli)
+		if err != nil {
+			panic(err)
+		}
+		m.session = session
 		fmt.Printf(`
 
   _ __ ___   __ _ _ __ ___ 
@@ -123,7 +126,7 @@ func New(cfg *MarsConfig) *mars {
 
 `, version)
 		m.initRedisSrv()
-		err := m.initialize()
+		err = m.initialize()
 		if err != nil {
 			panic(err)
 		}
@@ -145,6 +148,7 @@ func (m *mars) StartHttp() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	m.session.Close()
 	m.etcdCli.Close()
 	if err := m.httpSrv.Shutdown(ctx); err != nil {
 		httpLog.Fatalf("http server Shutdown err:%v", err)
@@ -295,50 +299,19 @@ func (m *mars) getNodeNum() (int64, error) {
 }
 
 func (m *mars) campaignLeader() (bool, string, error) {
-	session, err := concurrency.NewSession(m.etcdCli)
-	if err != nil {
-		m.log.Error(err)
-		return false, "", err
-	}
-	defer session.Close()
-	mutex := concurrency.NewMutex(session, campaignKey)
+	election := concurrency.NewElection(m.session, campaignKey)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
-	err = mutex.Lock(ctx)
-	defer mutex.Unlock(ctx)
-	if err != nil {
-		m.log.Error(err)
-		return false, "", err
-	}
-	kvc := clientv3.NewKV(m.etcdCli)
-	grantResponse, err := m.etcdCli.Grant(context.Background(), 10)
-	if err != nil {
-		return false, "", err
-	}
-	response, err := kvc.Txn(context.Background()).
-		If(clientv3util.KeyMissing(leaderKey)).
-		Then(clientv3.OpPut(leaderKey, m.tcpAddr, clientv3.WithLease(grantResponse.ID))).
-		Else(clientv3.OpGet(leaderKey)).
-		Commit()
-	if err != nil {
-		m.log.Error(err)
-		return false, "", err
-	}
 
-	if response.Succeeded {
-		m.log.WithField("worker", m.tcpAddr).Info("campaign success")
+	leader, err := election.Leader(ctx)
+	if err != nil {
+		err := election.Campaign(ctx, m.tcpAddr)
+		if err != nil {
+			return false, "", err
+		}
 		return true, m.tcpAddr, nil
 	}
-
-	for _, res := range response.Responses {
-		t := (*clientv3.GetResponse)(res.GetResponseRange())
-		for _, val := range t.Kvs {
-			if string(val.Key) == leaderKey {
-				return false, string(val.Value), nil
-			}
-		}
-	}
-	return false, "", TxnFailed
+	return false, string(leader.Kvs[0].Value), nil
 }
 
 func (m *mars) isLeader() (bool, string) {
@@ -354,52 +327,40 @@ func (m *mars) setLeader(b bool, s string) {
 	m.leaderAddr = s
 }
 
-func (m *mars) keepLeader() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	grantResponse, err := m.etcdCli.Grant(context.Background(), m.etcdKeyTimeOut)
-	if err != nil {
-		m.log.WithField("worker", m.tcpAddr).Errorf("etcd grant err:%v", err)
-		return
-	}
-	_, err = m.etcdCli.Put(ctx, leaderKey, m.tcpAddr, clientv3.WithLease(grantResponse.ID))
-	if err != nil {
-		m.log.WithField("worker", m.tcpAddr).Errorf("keep leader err:%v", err)
-		return
-	}
-	m.log.WithField("worker", m.tcpAddr).Debugf("keep leader success")
-}
-
-func (m *mars) keepFollower() {
+func (m *mars) keepKey(key string) error {
+	withField := m.log.WithField("worker", m.tcpAddr)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	grantResponse, err := m.etcdCli.Grant(ctx, m.etcdKeyTimeOut)
 	if err != nil {
-		m.log.WithField("worker", m.tcpAddr).Errorf("etcd grant err:%v", err)
-		return
+		withField.Errorf("etcd grant err:%v", err)
+		return err
 	}
-	_, err = m.etcdCli.Put(ctx, m.getEtcdNodeKey(), m.tcpAddr, clientv3.WithLease(grantResponse.ID))
-	if err != nil {
-		m.log.WithField("worker", m.tcpAddr).Errorf("keep follower err:%v", err)
-		return
-	}
-	m.log.WithField("worker", m.tcpAddr).Debugf("keep follower success")
-}
-
-func (m *mars) keepWorkerNum() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	grantResponse, err := m.etcdCli.Grant(ctx, m.etcdKeyTimeOut)
-	if err != nil {
-		m.log.WithField("worker", m.tcpAddr).Errorf("etcd grant err:%v", err)
-		return
-	}
-	_, err = m.etcdCli.Put(ctx, workerKey+"/"+strconv.FormatInt(m.workerNum, 10), m.tcpAddr, clientv3.WithLease(grantResponse.ID))
+	_, err = m.etcdCli.Put(ctx, key, m.tcpAddr, clientv3.WithLease(grantResponse.ID))
 	if err != nil {
 		m.log.Errorf("keep worker number error:%v", err)
-		return
+		return err
 	}
-	m.log.WithField("worker", m.tcpAddr).Debugf("keep worker number success number:%d", m.workerNum)
+	aliveResponses, err := m.etcdCli.KeepAlive(context.TODO(), grantResponse.ID)
+	if err != nil {
+		withField.Errorf("keep worker number error: %v", err)
+		return err
+	}
+	withField.Debugf("keep worker number success number:%d", m.workerNum)
+	go func() {
+		for{
+			select{
+			case r, ok := <-aliveResponses:
+				if ok {
+					withField.Debugf("keep alive TTL:%v", r.TTL)
+				}else {
+					withField.Error("keep alive chan closed")
+					return
+				}
+			}
+		}
+	}()
+	return nil
 }
 
 func (m *mars) getEtcdNodeKey() string {
@@ -409,7 +370,7 @@ func (m *mars) getEtcdNodeKey() string {
 func (m *mars) watchLeader() {
 	withField := m.log.WithField("worker", m.tcpAddr)
 	withField.Trace("start watch")
-	rch := m.etcdCli.Watch(context.Background(), leaderKey)
+	rch := m.etcdCli.Watch(context.Background(), campaignKey, clientv3.WithPrefix())
 	for wresp := range rch {
 		withField.Trace("get from watch")
 		for _, ev := range wresp.Events {
@@ -431,6 +392,7 @@ func (m *mars) watchLeader() {
 
 func (m *mars) initialize() error {
 	b, s, err := m.campaignLeader()
+	m.log.Infof("campaign result: %v, addr:%v", b, s)
 	if err != nil {
 		m.log.Errorf("campaign leader err: %v", err)
 		return err
@@ -444,21 +406,16 @@ func (m *mars) initialize() error {
 		m.workerNum = num
 		m.log.Infof("generator id:%d", num)
 		m.gen = generator.New(num)
-		m.keepWorkerNum()
+		err = m.keepKey(workerKey+"/"+strconv.FormatInt(m.workerNum, 10))
+		if err != nil {
+			return err
+		}
 		m.setLeader(b, s)
 		return nil
 	}
 	if !b && s != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		grantResponse, err := m.etcdCli.Grant(context.Background(), m.etcdKeyTimeOut)
+		err := m.keepKey(m.getEtcdNodeKey())
 		if err != nil {
-			m.log.WithField("worker", m.tcpAddr).Errorf("etcd grant err:%v", err)
-			return err
-		}
-		_, err = m.etcdCli.Put(ctx, m.getEtcdNodeKey(), m.tcpAddr, clientv3.WithLease(grantResponse.ID))
-		if err != nil {
-			err = errors.Wrap(err, "initialize to put node err")
 			return err
 		}
 		client := redis.NewClient(&redis.Options{
@@ -476,6 +433,13 @@ func (m *mars) initialize() error {
 		parseInt, err := strconv.ParseInt(s, 10, 64)
 		m.log.Infof("generator id:%d", parseInt)
 		m.workerNum = parseInt
+		err = m.keepKey(workerKey+"/"+strconv.FormatInt(m.workerNum, 10))
+		if err != nil {
+			return err
+		}
+		if err != nil {
+			return err
+		}
 		m.gen = generator.New(parseInt)
 		go m.watchLeader()
 		return nil
@@ -487,18 +451,6 @@ func (m *mars) initialize() error {
 func (m *mars) chanFuc() {
 	for {
 		select {
-		case x := <-m.keepChan:
-			if x {
-				m.keepWorkerNum()
-				b, _ := m.isLeader()
-				if b {
-					m.keepLeader()
-				} else {
-					m.keepFollower()
-				}
-			}
-		case <-m.ticker.C:
-			m.keepChan <- true
 		case x := <-m.campChan:
 			if x {
 				b, s, err := m.campaignLeader()
