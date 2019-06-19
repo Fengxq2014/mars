@@ -18,6 +18,7 @@ var (
 	redisPasswd string
 	httpName    string
 	httpPasswd  string
+	appKey      string
 )
 
 func getEnv(key string) string {
@@ -36,6 +37,7 @@ func init() {
 	flag.StringVar(&redisPasswd, "redisPasswd", "", "redis auth pass word")
 	flag.StringVar(&httpName, "httpName", "", "http basic auth name")
 	flag.StringVar(&httpPasswd, "httpPasswd", "", "http basic auth pass word")
+	flag.StringVar(&appKey, "appKey", "", "cluster key")
 }
 
 func main() {
@@ -46,6 +48,7 @@ func main() {
 	getValueFromEnv(&redisPasswd, "MARS_REDIS_PASSWD")
 	getValueFromEnv(&httpName, "MARS_HTTP_NAME")
 	getValueFromEnv(&httpPasswd, "MARS_HTTP_PASSWD")
+	getValueFromEnv(&appKey, "MARS_APP_KEY")
 	logger := log.New()
 	if verbose {
 		logger.SetLevel(log.DebugLevel)
@@ -69,6 +72,7 @@ func main() {
 		HttpName:      httpName,
 		HttpPasswd:    httpPasswd,
 		HttpTimeOut:   dialTimeout,
+		AppKey:        appKey,
 	}
 
 	m := mars.New(cfg)

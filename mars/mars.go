@@ -23,6 +23,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 type mars struct {
@@ -43,7 +44,6 @@ type mars struct {
 	redisPasswd    string
 	httpName       string
 	httpPasswd     string
-	session        *concurrency.Session
 }
 
 type MarsConfig struct {
@@ -55,6 +55,7 @@ type MarsConfig struct {
 	RedisPasswd   string
 	HttpName      string
 	HttpPasswd    string
+	AppKey        string
 }
 
 var (
@@ -62,7 +63,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.1.0"
+	version     = "1.1.1"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -79,6 +80,10 @@ func New(cfg *MarsConfig) *mars {
 				HttpTimeOut:   10 * time.Second,
 			}
 		}
+		campaignKey = cfg.AppKey + "/" + campaignKey
+		leaderKey = cfg.AppKey + "/" + leaderKey
+		nodeKey = cfg.AppKey + "/" + nodeKey
+		workerKey = cfg.AppKey + "/" + workerKey
 		r := mux.NewRouter()
 		if cfg.HttpName != "" && cfg.HttpPasswd != "" {
 			amw := authenticationMiddleware{}
@@ -109,11 +114,7 @@ func New(cfg *MarsConfig) *mars {
 			httpName:       cfg.HttpName,
 			httpPasswd:     cfg.HttpPasswd,
 		}
-		session, err := concurrency.NewSession(m.etcdCli)
-		if err != nil {
-			panic(err)
-		}
-		m.session = session
+
 		fmt.Printf(`
 
   _ __ ___   __ _ _ __ ___ 
@@ -126,7 +127,7 @@ func New(cfg *MarsConfig) *mars {
 
 `, version)
 		m.initRedisSrv()
-		err = m.initialize()
+		err := m.initialize()
 		if err != nil {
 			panic(err)
 		}
@@ -148,7 +149,6 @@ func (m *mars) StartHttp() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	m.session.Close()
 	m.etcdCli.Close()
 	if err := m.httpSrv.Shutdown(ctx); err != nil {
 		httpLog.Fatalf("http server Shutdown err:%v", err)
@@ -260,6 +260,7 @@ func (m *mars) initRedisSrv() {
 			_, s := m.isLeader()
 			addr, err := net.ResolveTCPAddr("tcp", s)
 			if err != nil {
+				m.log.Errorf("sentinel, leaderAddr:%s, err:%v", s, err)
 				w.AppendError(err.Error())
 				return
 			}
@@ -267,6 +268,7 @@ func (m *mars) initRedisSrv() {
 			w.AppendBulkString(addr.IP.String())
 			w.AppendBulkString(strconv.Itoa(addr.Port))
 		} else {
+			m.log.Errorf("unknown command:%v", c.Name)
 			w.AppendError(redeo.UnknownCommand(c.Name))
 		}
 		//} else {
@@ -299,7 +301,11 @@ func (m *mars) getNodeNum() (int64, error) {
 }
 
 func (m *mars) campaignLeader() (bool, string, error) {
-	election := concurrency.NewElection(m.session, campaignKey)
+	s, err := concurrency.NewSession(m.etcdCli, concurrency.WithTTL(*(*int)(unsafe.Pointer(&m.etcdKeyTimeOut))))
+	if err != nil {
+		return false, "", err
+	}
+	election := concurrency.NewElection(s, campaignKey)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
 
@@ -323,6 +329,7 @@ func (m *mars) isLeader() (bool, string) {
 func (m *mars) setLeader(b bool, s string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.log.Infof("set leader, %v, %s", b, s)
 	m.leader = b
 	m.leaderAddr = s
 }
@@ -348,12 +355,12 @@ func (m *mars) keepKey(key string) error {
 	}
 	withField.Debugf("keep worker number success number:%d", m.workerNum)
 	go func() {
-		for{
-			select{
+		for {
+			select {
 			case r, ok := <-aliveResponses:
 				if ok {
 					withField.Debugf("keep alive TTL:%v", r.TTL)
-				}else {
+				} else {
 					withField.Error("keep alive chan closed")
 					return
 				}
@@ -406,7 +413,7 @@ func (m *mars) initialize() error {
 		m.workerNum = num
 		m.log.Infof("generator id:%d", num)
 		m.gen = generator.New(num)
-		err = m.keepKey(workerKey+"/"+strconv.FormatInt(m.workerNum, 10))
+		err = m.keepKey(workerKey + "/" + strconv.FormatInt(m.workerNum, 10))
 		if err != nil {
 			return err
 		}
@@ -423,17 +430,17 @@ func (m *mars) initialize() error {
 			Password: m.redisPasswd,
 			DB:       0, // use default DB
 		})
-		s, err := client.Get("node").Result()
+		num, err := client.Get("node").Result()
 		client.Close()
 		if err != nil {
 			err = errors.Wrap(err, "initialize get node number err")
 			return err
 		}
-		m.log.Infof("get node num from leader:%s", s)
-		parseInt, err := strconv.ParseInt(s, 10, 64)
+		m.log.Infof("get node num from leader:%s", num)
+		parseInt, err := strconv.ParseInt(num, 10, 64)
 		m.log.Infof("generator id:%d", parseInt)
 		m.workerNum = parseInt
-		err = m.keepKey(workerKey+"/"+strconv.FormatInt(m.workerNum, 10))
+		err = m.keepKey(workerKey + "/" + strconv.FormatInt(m.workerNum, 10))
 		if err != nil {
 			return err
 		}
@@ -442,6 +449,7 @@ func (m *mars) initialize() error {
 		}
 		m.gen = generator.New(parseInt)
 		go m.watchLeader()
+		m.setLeader(b, s)
 		return nil
 	}
 
@@ -457,6 +465,7 @@ func (m *mars) chanFuc() {
 				m.log.Debugf("campaign result:%t,leader:%s, this.tcp:%s", b, s, m.tcpAddr)
 				if err != nil {
 					m.log.Error(err)
+					m.log.Infof("master:%s", m.leaderAddr)
 					continue
 				}
 				m.setLeader(b, s)
