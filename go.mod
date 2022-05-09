@@ -12,7 +12,7 @@ require (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/go-redis/redis v6.15.0+incompatible
-	github.com/gogo/protobuf v1.1.1 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20181024230925-c65c006176ff // indirect
 	github.com/google/btree v0.0.0-20180813153112-4030bb1f1f0c // indirect
 	github.com/gopherjs/gopherjs v0.0.0-20190430165422-3e4dfb77656c // indirect
