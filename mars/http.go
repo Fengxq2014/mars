@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"net/http"
+	"strconv"
 )
+
+var maxNum = 100
 
 type authenticationMiddleware struct {
 	tokenUsers map[string]string
@@ -47,7 +50,28 @@ func authorizationHeader(user, password string) string {
 }
 
 func GetID(w http.ResponseWriter, r *http.Request) {
-	ids := m.gen.GetStr()
+	num := r.URL.Query().Get("num")
+	if num == "" {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "%s", m.gen.GetStr())
+		return
+	}
+	atoi, err := strconv.Atoi(num)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "错误的参数内容%s", num)
+		return
+	}
+	if atoi > maxNum {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "请求数量:%d,超出最大限制数量%d", atoi, maxNum)
+		return
+	}
+	for i := 0; i < atoi; i++ {
+		fmt.Fprintln(w, m.gen.GetID())
+	}
+	//w.WriteHeader(http.StatusOK)
+
 	//ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	//_, err := etcdsrv.New().Cli.Put(ctx, "mars/keys/"+ids, ids)
 	//cancel()
@@ -56,8 +80,29 @@ func GetID(w http.ResponseWriter, r *http.Request) {
 	//	fmt.Fprintf(w, "Server Error,%v", err)
 	//	return
 	//}
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "%s", ids)
+}
+
+func GetID53(w http.ResponseWriter, r *http.Request) {
+	num := r.URL.Query().Get("num")
+	if num == "" {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "%s", m.gen.GetStr53())
+		return
+	}
+	atoi, err := strconv.Atoi(num)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "错误的参数内容%s", num)
+		return
+	}
+	if atoi > maxNum {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "请求数量:%d,超出最大限制数量%d", atoi, maxNum)
+		return
+	}
+	for i := 0; i < atoi; i++ {
+		fmt.Fprintln(w, m.gen.GetID53())
+	}
 }
 
 func GetIDInfo(w http.ResponseWriter, r *http.Request) {

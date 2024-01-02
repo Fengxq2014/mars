@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: mars
+  labels:
+    app: etcd
+  name: etcd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  serviceName: etcd-headless
+  template:
+    metadata:
+      labels:
+        app: etcd
+      name: etcd
+    spec:
+      containers:
+        - env:
+            - name: MY_POD_NAME  #当前pod名
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CLUSTER_NAMESPACE  #名称空间
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_NAME   #内部通信的无头服务名称
+              value: "etcd-headless"
+            - name: INITIAL_CLUSTER   #initial-cluster的值
+              value: "etcd-0=http://etcd-0.etcd-headless:2380"
+            - name: ALLOW_NONE_AUTHENTICATION
+              value: "yes"
+          image: bitnami/etcd:3.5.11
+          imagePullPolicy: IfNotPresent
+          name: etcd
+          ports:
+            - containerPort: 2380
+              name: peer
+              protocol: TCP
+            - containerPort: 2379
+              name: client
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /var/lib/etcd
+              name: data-etcd
+      volumes:
+        - name: data-etcd
+          hostPath:
+            type: DirectoryOrCreate
+            path: /mnt/nfs/etcd
+  updateStrategy:
+    type: OnDelete
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: mars
+  labels:
+    app: etcd
+  name: etcd-svc
+spec:
+  ports:
+    - name: etcd-cluster
+      port: 2379
+      targetPort: 2379
+      nodePort: 30109   # nodePort
+  selector:
+    app: etcd
+  sessionAffinity: None
+  type: NodePort

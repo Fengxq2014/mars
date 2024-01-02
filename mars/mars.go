@@ -7,13 +7,13 @@ import (
 	"github.com/Fengxq2014/mars/generator"
 	"github.com/bsm/redeo"
 	"github.com/bsm/redeo/resp"
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/clientv3/concurrency"
-	"github.com/coreos/etcd/mvcc/mvccpb"
 	"github.com/go-redis/redis"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"net"
 	"net/http"
 	"os"
@@ -56,6 +56,7 @@ type MarsConfig struct {
 	HttpName      string
 	HttpPasswd    string
 	AppKey        string
+	Ip            string
 }
 
 var (
@@ -63,7 +64,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.1.1"
+	version     = "1.2.0"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -92,7 +93,14 @@ func New(cfg *MarsConfig) *mars {
 		}
 
 		r.HandleFunc("/id", GetID).Methods("GET")
+		r.HandleFunc("/id53", GetID53).Methods("GET")
 		r.HandleFunc("/info/{id:[0-9]+}", GetIDInfo).Methods("GET")
+
+		if cfg.Ip != "" {
+			cfg.HttpAddr = cfg.Ip + ":" + strings.Split(cfg.HttpAddr, ":")[1]
+			cfg.TcpAddr = cfg.Ip + ":" + strings.Split(cfg.TcpAddr, ":")[1]
+		}
+
 		s := &http.Server{
 			Addr:           cfg.HttpAddr,
 			Handler:        r,
@@ -246,17 +254,67 @@ func (m *mars) initRedisSrv() {
 			if c.Arg(0).String() == "id" {
 				return m.gen.GetStr()
 			}
+			if c.Arg(0).String() == "id53" {
+				return m.gen.GetStr53()
+			}
 			return nil
 		} else {
 			return errors.New("NOAUTH Authentication required.")
 		}
 	}))
+	m.redisSrv.HandleFunc("lrange", func(w resp.ResponseWriter, c *resp.Command) {
+		cli := redeo.GetClient(c.Context())
+		value := cli.Context().Value(ctxAuthOK{})
+		b, ok := value.(bool)
+		if ok && b {
+			if c.ArgN() != 3 {
+				w.AppendError(redeo.WrongNumberOfArgs(c.Name))
+				return
+			}
+			start, err := c.Arg(1).Int()
+			if err != nil {
+				w.AppendError(redeo.WrongNumberOfArgs(c.Arg(1).String()))
+				return
+			}
+			end, err := c.Arg(2).Int()
+			if err != nil {
+				w.AppendError(redeo.WrongNumberOfArgs(c.Arg(1).String()))
+				return
+			}
+			if start >= end {
+				w.AppendError(redeo.UnknownCommand("start >= end"))
+				return
+			}
+			num := int(end - start)
+			if num > maxNum {
+				w.AppendError(redeo.WrongNumberOfArgs(fmt.Sprintf("max num is %d", maxNum)))
+				return
+			}
+			if c.Arg(0).String() == "id" {
+				w.AppendArrayLen(num)
+				for i := 0; i < num; i++ {
+					w.AppendBulkString(m.gen.GetStr())
+				}
+				return
+			}
+			if c.Arg(0).String() == "id53" {
+				w.AppendArrayLen(num)
+				for i := 0; i < num; i++ {
+					w.AppendBulkString(m.gen.GetStr53())
+				}
+				return
+			}
+		} else {
+			w.AppendError("NOAUTH Authentication required.")
+			return
+		}
+	})
 	m.redisSrv.HandleFunc("sentinel", func(w resp.ResponseWriter, c *resp.Command) {
 		//cli := redeo.GetClient(c.Context())
 		//value := cli.Context().Value(ctxAuthOK{})
 		//b, ok := value.(bool)
 		//if ok && b {
-		if c.Arg(0).String() == "get-master-addr-by-name" {
+		if strings.ToLower(c.Arg(0).String()) == "get-master-addr-by-name" {
 			_, s := m.isLeader()
 			addr, err := net.ResolveTCPAddr("tcp", s)
 			if err != nil {
@@ -268,7 +326,7 @@ func (m *mars) initRedisSrv() {
 			w.AppendBulkString(addr.IP.String())
 			w.AppendBulkString(strconv.Itoa(addr.Port))
 		} else {
-			m.log.Errorf("unknown command:%v", c.Name)
+			m.log.Errorf("unknown command:%v %v", c.Name, c.Args)
 			w.AppendError(redeo.UnknownCommand(c.Name))
 		}
 		//} else {

@@ -19,6 +19,7 @@ var (
 	httpName    string
 	httpPasswd  string
 	appKey      string
+	Ip          string
 )
 
 func getEnv(key string) string {
@@ -38,6 +39,7 @@ func init() {
 	flag.StringVar(&httpName, "httpName", "", "http basic auth name")
 	flag.StringVar(&httpPasswd, "httpPasswd", "", "http basic auth pass word")
 	flag.StringVar(&appKey, "appKey", "", "cluster key")
+	flag.StringVar(&Ip, "ip", "", "local ip")
 }
 
 func main() {
@@ -49,6 +51,7 @@ func main() {
 	getValueFromEnv(&httpName, "MARS_HTTP_NAME")
 	getValueFromEnv(&httpPasswd, "MARS_HTTP_PASSWD")
 	getValueFromEnv(&appKey, "MARS_APP_KEY")
+	getValueFromEnv(&Ip, "POD_IP")
 	logger := log.New()
 	if verbose {
 		logger.SetLevel(log.DebugLevel)
@@ -73,6 +76,7 @@ func main() {
 		HttpPasswd:    httpPasswd,
 		HttpTimeOut:   dialTimeout,
 		AppKey:        appKey,
+		Ip:            Ip,
 	}
 
 	m := mars.New(cfg)
@@ -84,7 +88,7 @@ func getValueFromEnv(key *string, envKey string) {
 	if *key == "" {
 		err := godotenv.Load()
 		if err != nil {
-			panic(envKey + " is empty and .env file not found")
+			log.Errorf("%s is empty and .env file not found", envKey)
 		}
 		*key = getEnv(envKey)
 	}

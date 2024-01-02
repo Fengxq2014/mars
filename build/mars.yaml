@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: mars
+  name: mars
+spec:
+  serviceName: mars
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mars
+  template:
+    metadata:
+      labels:
+        app: mars
+    spec:
+      imagePullSecrets:
+        - name: dooffe-harbor
+      containers:
+        - name: mars
+          image: 192.168.1.37/common/mars:latest
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+            - name: MARS_ETCD_ENDPOINTS
+              value: "etcd-headless:2379"
+            - name: MARS_HTTP_ADDR
+              value: ":8080"
+            - name: MARS_TCP_ADDR
+              value: ":8081"
+            - name: MARS_REDIS_PASSWD
+              value: "dooffe"
+            - name: MARS_HTTP_NAME
+              value: "user"
+            - name: MARS_HTTP_PASSWD
+              value: "dooffe"
+            - name: MARS_APP_KEY
+              value: "yhd"
+          ports:
+            - containerPort: 8081
+              name: tcp
+            - containerPort: 8080
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: mars
+  name: mars-svc
+  labels:
+    app: mars
+spec:
+  selector:
+    app: mars
+#  clusterIP: None                  # Headless Service
+  type: NodePort
+  ports:
+    - name: tcp
+      port: 8081
+      nodePort: 57211
+    - name: http
+      port: 8080
+      nodePort: 57210
