@@ -2,9 +2,11 @@ package mars
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/Fengxq2014/mars/etcdsrv"
 	"github.com/Fengxq2014/mars/generator"
+	"github.com/Fengxq2014/mars/sequence"
 	"github.com/bsm/redeo"
 	"github.com/bsm/redeo/resp"
 	"github.com/go-redis/redis"
@@ -44,6 +46,7 @@ type mars struct {
 	redisPasswd    string
 	httpName       string
 	httpPasswd     string
+	seqMap         map[string]*sequence.Sequence
 }
 
 type MarsConfig struct {
@@ -64,7 +67,7 @@ var (
 	leaderKey   = "mars/node/leader"
 	nodeKey     = "mars/node"
 	workerKey   = "mars/worker"
-	version     = "1.2.0"
+	version     = "1.3.0"
 	TxnFailed   = errors.New("etcd txn failed")
 	once        sync.Once
 	m           *mars
@@ -77,7 +80,7 @@ func New(cfg *MarsConfig) *mars {
 				HttpAddr:      ":8080",
 				TcpAddr:       ":8089",
 				Log:           log.New(),
-				EtcdEndPoints: "localhost:23790",
+				EtcdEndPoints: "localhost:2379",
 				HttpTimeOut:   10 * time.Second,
 			}
 		}
@@ -95,6 +98,7 @@ func New(cfg *MarsConfig) *mars {
 		r.HandleFunc("/id", GetID).Methods("GET")
 		r.HandleFunc("/id53", GetID53).Methods("GET")
 		r.HandleFunc("/info/{id:[0-9]+}", GetIDInfo).Methods("GET")
+		r.HandleFunc("/seq/{id}", GetSeq).Methods("GET")
 
 		if cfg.Ip != "" {
 			cfg.HttpAddr = cfg.Ip + ":" + strings.Split(cfg.HttpAddr, ":")[1]
@@ -121,6 +125,26 @@ func New(cfg *MarsConfig) *mars {
 			redisPasswd:    cfg.RedisPasswd,
 			httpName:       cfg.HttpName,
 			httpPasswd:     cfg.HttpPasswd,
+			seqMap:         make(map[string]*sequence.Sequence),
+		}
+		var seqConf []sequence.Config
+		getenv := os.Getenv("SEQ.CONF")
+		if getenv != "" {
+			seqSetting([]byte(getenv), seqConf, cfg)
+		} else {
+			_, err := os.Stat("./seq.conf")
+			if err == nil {
+
+				file, err := os.ReadFile("./seq.conf")
+				if err != nil {
+					m.log.Fatalf("Error reading seq.conf file:", err)
+				}
+				seqSetting(file, seqConf, cfg)
+			} else if os.IsNotExist(err) {
+				m.log.Warnf("文件 %s 不存在\n", "seq.conf")
+			} else {
+				m.log.Warn("发生了其他错误", err.Error())
+			}
 		}
 
 		fmt.Printf(`
@@ -142,6 +166,15 @@ func New(cfg *MarsConfig) *mars {
 		go m.chanFuc()
 	})
 	return m
+}
+
+func seqSetting(file []byte, seqConf []sequence.Config, cfg *MarsConfig) {
+	if err := json.Unmarshal(file, &seqConf); err != nil {
+		m.log.Fatalf("Error parse seq.conf file:", err)
+	}
+	for _, config := range seqConf {
+		m.seqMap[config.Id] = sequence.New(m.etcdCli, cfg.AppKey, m.log, config.Id, config.TimeRollback, config.NumRollback)
+	}
 }
 
 func (m *mars) StartHttp() {
@@ -257,6 +290,17 @@ func (m *mars) initRedisSrv() {
 			if c.Arg(0).String() == "id53" {
 				return m.gen.GetStr53()
 			}
+			if strings.HasPrefix(c.Arg(0).String(), "seq/") {
+				id, _ := strings.CutPrefix(c.Arg(0).String(), "seq/")
+				if s, ok := m.seqMap[id]; ok {
+					next, err := s.Next()
+					if err != nil {
+						return redeo.ErrUnknownCommand(err.Error())
+					}
+					return next
+				}
+				return redeo.ErrUnknownCommand(c.Arg(0).String())
+			}
 			return nil
 		} else {
 			return errors.New("NOAUTH Authentication required.")
@@ -302,6 +346,22 @@ func (m *mars) initRedisSrv() {
 				for i := 0; i < num; i++ {
 					w.AppendBulkString(m.gen.GetStr53())
 				}
+				return
+			}
+			if strings.HasPrefix(c.Arg(0).String(), "seq/") {
+				id, _ := strings.CutPrefix(c.Arg(0).String(), "seq/")
+				if s, ok := m.seqMap[id]; ok {
+					for i := 0; i < num; i++ {
+						next, err := s.Next()
+						if err != nil {
+							w.AppendError(redeo.UnknownCommand(c.Arg(0).String()))
+							return
+						}
+						w.AppendBulkString(next)
+					}
+					return
+				}
+				w.AppendError(redeo.UnknownCommand(c.Arg(0).String()))
 				return
 			}
 		} else {

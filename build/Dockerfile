@@ -7,9 +7,10 @@ RUN apk add --no-cache shadow
 #RUN useradd -m app
 #USER app
 
-WORKDIR /mars
 RUN mkdir mars
+WORKDIR /mars
 ENV CFG=""
 ENV PARAMS=""
-ADD mars-amd64-upx /mars/
-CMD echo $CFG > .env && ./mars-amd64-upx $PARAMS
+ENV SEQ=""
+ADD mars-amd64-upx /mars/mars-amd64-upx
+CMD echo $CFG >/mars/.env && $SEQ >/mars/seq.conf && /mars/mars-amd64-upx $PARAMS

@@ -127,3 +127,44 @@ func GetIDInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(bytes)
 }
+
+func GetSeq(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if s, ok := m.seqMap[vars["id"]]; ok {
+		num := r.URL.Query().Get("num")
+		if num == "" {
+			next, err := s.Next()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, err.Error())
+				return
+			}
+			fmt.Fprint(w, next)
+			return
+		}
+		atoi, err := strconv.Atoi(num)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "错误的参数内容%s", num)
+			return
+		}
+		if atoi > maxNum {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "请求数量:%d,超出最大限制数量%d", atoi, maxNum)
+			return
+		}
+		for i := 0; i < atoi; i++ {
+			next, err := s.Next()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, err.Error())
+				return
+			}
+			fmt.Fprintln(w, next)
+		}
+
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "sequence id "+vars["id"]+" not exist")
+	}
+}
