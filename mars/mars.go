@@ -238,6 +238,15 @@ func (m *mars) initRedisSrv() {
 			w.AppendError("NOAUTH Authentication required.")
 		}
 	})
+	m.redisSrv.HandleFunc("select", func(w resp.ResponseWriter, c *resp.Command) {
+		if c.Arg(0).String() == m.redisPasswd {
+			client := redeo.GetClient(c.Context())
+			client.SetContext(context.WithValue(client.Context(), ctxAuthOK{}, true))
+			w.AppendOK()
+		} else {
+			w.AppendError("NOAUTH Authentication required.")
+		}
+	})
 	m.redisSrv.HandleFunc("hgetall", func(w resp.ResponseWriter, c *resp.Command) {
 		cli := redeo.GetClient(c.Context())
 		value := cli.Context().Value(ctxAuthOK{})
@@ -351,6 +360,7 @@ func (m *mars) initRedisSrv() {
 			if strings.HasPrefix(c.Arg(0).String(), "seq/") {
 				id, _ := strings.CutPrefix(c.Arg(0).String(), "seq/")
 				if s, ok := m.seqMap[id]; ok {
+					w.AppendArrayLen(num)
 					for i := 0; i < num; i++ {
 						next, err := s.Next()
 						if err != nil {
