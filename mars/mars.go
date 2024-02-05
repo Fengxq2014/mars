@@ -173,7 +173,7 @@ func seqSetting(file []byte, seqConf []sequence.Config, cfg *MarsConfig) {
 		m.log.Fatalf("Error parse seq.conf file:", err)
 	}
 	for _, config := range seqConf {
-		m.seqMap[config.Id] = sequence.New(m.etcdCli, cfg.AppKey, m.log, config.Id, config.TimeRollback, config.NumRollback)
+		m.seqMap[config.Id] = sequence.New(m.etcdCli, cfg.AppKey, m.log, config.Id, config.TimeRollback, config.NumRollback, config.InitNum)
 	}
 }
 

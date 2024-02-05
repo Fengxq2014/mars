@@ -17,15 +17,17 @@ type Sequence struct {
 	etcdCli      *clientv3.Client
 	appKey       string
 	log          *log.Logger
+	InitNum      int64
 }
 
 type Config struct {
 	Id           string `json:"id"`
 	TimeRollback string `json:"timeRollback"`
 	NumRollback  int64  `json:"numRollback"`
+	InitNum      int64  `json:"initNum"`
 }
 
-func New(etcdCli *clientv3.Client, appKey string, log *log.Logger, id string, t string, max int64) *Sequence {
+func New(etcdCli *clientv3.Client, appKey string, log *log.Logger, id string, t string, max int64, init int64) *Sequence {
 	return &Sequence{
 		Id:           id,
 		TimeRollback: t,
@@ -33,6 +35,7 @@ func New(etcdCli *clientv3.Client, appKey string, log *log.Logger, id string, t 
 		etcdCli:      etcdCli,
 		appKey:       appKey,
 		log:          log,
+		InitNum:      init,
 	}
 }
 
@@ -64,7 +67,7 @@ func (s *Sequence) Next() (string, error) {
 		if len(tx.Responses) == 2 {
 			s.log.Info("事务成功返回结果,", tx.Responses[1].GetResponseRange().Kvs[0].Version)
 			s.numRoll(tx.Responses[1].GetResponseRange().Kvs[0].Version, key)
-			return strconv.FormatInt(tx.Responses[1].GetResponseRange().Kvs[0].Version, 10), nil
+			return strconv.FormatInt(tx.Responses[1].GetResponseRange().Kvs[0].Version+s.InitNum, 10), nil
 		}
 		return "", errors.Errorf("response count err:%d, key:%s", len(tx.Responses), key)
 	}
