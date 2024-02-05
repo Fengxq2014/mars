@@ -86,9 +86,9 @@ func (s *Sequence) numRoll(version int64, key string) {
 func (s *Sequence) getKeyAndSec() (string, int) {
 	now := time.Now()
 	if s.TimeRollback == "" {
-		return s.appKey + "/seq/", 0
+		return s.appKey + "/seq/" + s.Id + "/", 0
 	}
-	tmp := s.appKey + "/seq/"
+	tmp := s.appKey + "/seq/" + s.Id + "/"
 	if s.TimeRollback == "m" {
 		tmp += fmt.Sprintf("%d%d%d%d%d", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute())
 		return tmp, 60 - now.Second()
