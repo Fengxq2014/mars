@@ -21,6 +21,30 @@
 ## 依赖
 * etcd 一个高可用的分布式键值(key-value)数据库，etcd内部采用raft协议作为一致性算法
 
+## Worker 租约与升级
+
+* 同一 ID 空间的所有实例必须使用同一个 etcd 集群和 AppKey，并保持主机时钟同步。
+* 实例直接通过 etcd 事务抢占 worker key（不存在才写入），不再向 leader 查询空闲编号后覆盖写入。
+  两种 ID 格式共用编号，因此每个 AppKey 最多运行 32 个发号实例（worker 0–31）。
+* 续租失败、worker key 归属改变或本地租约期限到期后，该实例停止发号，直到进程重启。
+  HTTP `/id`、`/id53` 返回 503；Redis GET/LRANGE 返回错误，批量响应不会输出部分 ID。
+  部署时应通过服务监督程序或存活检查重启这些实例。网络恢复不会自动重新启用旧的生成器。
+* worker 编号重用后至少等待一秒再发号，避免 53 位 ID 在同一秒内从序号零重新开始。
+  正常停止时不提前释放已使用的 worker 租约，由 etcd 等待其 TTL 到期。
+* **升级时需要先停止同一 AppKey 下的全部旧版本实例，再启动新版本，不能混用滚动升级。**
+  旧版的无条件写入仍会覆盖 worker key，无法由新版的事务单方面保证互斥。
+  本次修改保持 ID 格式和两个 epoch 不变。
+
+## 测试
+
+```sh
+go test ./...
+go test -race ./...
+# 可选：使用本地 etcd 可执行文件运行真实事务和租约集成测试。
+# 测试自动创建临时目录，并只监听 127.0.0.1，不访问现有 etcd 集群。
+MARS_TEST_ETCD_BINARY=/path/to/etcd go test ./mars -run TestRealEtcd -v
+```
+
 ## 使用
 * http
    * 获取id
