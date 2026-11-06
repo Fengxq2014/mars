@@ -50,58 +50,35 @@ func authorizationHeader(user, password string) string {
 }
 
 func GetID(w http.ResponseWriter, r *http.Request) {
-	num := r.URL.Query().Get("num")
-	if num == "" {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "%s", m.gen.GetStr())
-		return
-	}
-	atoi, err := strconv.Atoi(num)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "错误的参数内容%s", num)
-		return
-	}
-	if atoi > maxNum {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "请求数量:%d,超出最大限制数量%d", atoi, maxNum)
-		return
-	}
-	for i := 0; i < atoi; i++ {
-		fmt.Fprintln(w, m.gen.GetID())
-	}
-	//w.WriteHeader(http.StatusOK)
-
-	//ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	//_, err := etcdsrv.New().Cli.Put(ctx, "mars/keys/"+ids, ids)
-	//cancel()
-	//if err != nil {
-	//	w.WriteHeader(http.StatusInternalServerError)
-	//	fmt.Fprintf(w, "Server Error,%v", err)
-	//	return
-	//}
+	writeIDs(w, r, false)
 }
 
 func GetID53(w http.ResponseWriter, r *http.Request) {
+	writeIDs(w, r, true)
+}
+
+func writeIDs(w http.ResponseWriter, r *http.Request, short bool) {
 	num := r.URL.Query().Get("num")
-	if num == "" {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "%s", m.gen.GetStr53())
-		return
+	count := 1
+	if num != "" {
+		var err error
+		count, err = strconv.Atoi(num)
+		if err != nil || count < 1 || count > maxNum {
+			http.Error(w, fmt.Sprintf("请求数量必须为1到%d", maxNum), http.StatusBadRequest)
+			return
+		}
 	}
-	atoi, err := strconv.Atoi(num)
+	ids, err := m.generateIDs(count, short)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "错误的参数内容%s", num)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if atoi > maxNum {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "请求数量:%d,超出最大限制数量%d", atoi, maxNum)
-		return
-	}
-	for i := 0; i < atoi; i++ {
-		fmt.Fprintln(w, m.gen.GetID53())
+	for _, id := range ids {
+		if num == "" {
+			fmt.Fprint(w, id)
+		} else {
+			fmt.Fprintln(w, id)
+		}
 	}
 }
 

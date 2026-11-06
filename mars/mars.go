@@ -9,7 +9,6 @@ import (
 	"github.com/Fengxq2014/mars/sequence"
 	"github.com/bsm/redeo"
 	"github.com/bsm/redeo/resp"
-	"github.com/go-redis/redis"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -38,7 +37,8 @@ type mars struct {
 	leaderAddr     string
 	etcdCli        *clientv3.Client
 	mu             sync.RWMutex
-	gen            *generator.Generator
+	gen            idGenerator
+	worker         *workerLease
 	campChan       chan bool
 	ticker         *time.Ticker
 	etcdKeyTimeOut int64
@@ -137,7 +137,7 @@ func New(cfg *MarsConfig) *mars {
 
 				file, err := os.ReadFile("./seq.conf")
 				if err != nil {
-					m.log.Fatalf("Error reading seq.conf file:", err)
+					m.log.Fatalf("Error reading seq.conf file: %v", err)
 				}
 				seqSetting(file, seqConf, cfg)
 			} else if os.IsNotExist(err) {
@@ -170,7 +170,7 @@ func New(cfg *MarsConfig) *mars {
 
 func seqSetting(file []byte, seqConf []sequence.Config, cfg *MarsConfig) {
 	if err := json.Unmarshal(file, &seqConf); err != nil {
-		m.log.Fatalf("Error parse seq.conf file:", err)
+		m.log.Fatalf("Error parse seq.conf file: %v", err)
 	}
 	for _, config := range seqConf {
 		m.seqMap[config.Id] = sequence.New(m.etcdCli, cfg.AppKey, m.log, config.Id, config.TimeRollback, config.NumRollback, config.InitNum)
@@ -184,12 +184,14 @@ func (m *mars) StartHttp() {
 		httpLog.Fatal(m.httpSrv.ListenAndServe())
 		httpLog.Println("http server shutdown")
 	}()
-	ch := make(chan os.Signal)
+	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(ch)
 	httpLog.Println(<-ch)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	m.worker.fence()
 	m.etcdCli.Close()
 	if err := m.httpSrv.Shutdown(ctx); err != nil {
 		httpLog.Fatalf("http server Shutdown err:%v", err)
@@ -294,10 +296,18 @@ func (m *mars) initRedisSrv() {
 				return num
 			}
 			if c.Arg(0).String() == "id" {
-				return m.gen.GetStr()
+				ids, err := m.generateIDs(1, false)
+				if err != nil {
+					return fmt.Errorf("ERR %w", err)
+				}
+				return ids[0]
 			}
 			if c.Arg(0).String() == "id53" {
-				return m.gen.GetStr53()
+				ids, err := m.generateIDs(1, true)
+				if err != nil {
+					return fmt.Errorf("ERR %w", err)
+				}
+				return ids[0]
 			}
 			if strings.HasPrefix(c.Arg(0).String(), "seq/") {
 				id, _ := strings.CutPrefix(c.Arg(0).String(), "seq/")
@@ -339,21 +349,19 @@ func (m *mars) initRedisSrv() {
 				return
 			}
 			num := int(end - start)
-			if num > maxNum {
+			if num < 1 || num > maxNum {
 				w.AppendError(redeo.WrongNumberOfArgs(fmt.Sprintf("max num is %d", maxNum)))
 				return
 			}
-			if c.Arg(0).String() == "id" {
-				w.AppendArrayLen(num)
-				for i := 0; i < num; i++ {
-					w.AppendBulkString(m.gen.GetStr())
+			if c.Arg(0).String() == "id" || c.Arg(0).String() == "id53" {
+				ids, err := m.generateIDs(num, c.Arg(0).String() == "id53")
+				if err != nil {
+					w.AppendError("ERR " + err.Error())
+					return
 				}
-				return
-			}
-			if c.Arg(0).String() == "id53" {
 				w.AppendArrayLen(num)
-				for i := 0; i < num; i++ {
-					w.AppendBulkString(m.gen.GetStr53())
+				for _, id := range ids {
+					w.AppendBulkString(id)
 				}
 				return
 			}
@@ -407,7 +415,7 @@ func (m *mars) initRedisSrv() {
 }
 
 func (m *mars) getNodeNum() (int64, error) {
-	getResponse, err := m.etcdCli.Get(context.Background(), workerKey, clientv3.WithPrefix())
+	getResponse, err := m.etcdCli.Get(context.Background(), workerKey+"/", clientv3.WithPrefix())
 	if err != nil {
 		return 0, err
 	}
@@ -416,10 +424,10 @@ func (m *mars) getNodeNum() (int64, error) {
 	}
 	keySlice := make(map[string]string)
 	for _, kv := range getResponse.Kvs {
-		keySlice[strings.TrimLeft(string(kv.Key), workerKey)] = string(kv.Value)
+		keySlice[strings.TrimPrefix(string(kv.Key), workerKey+"/")] = string(kv.Value)
 	}
-	m.log.Debug("worker num map:%v", keySlice)
-	for i := 0; i <= 1024; i++ {
+	m.log.Debugf("worker num map:%v", keySlice)
+	for i := 0; i <= maxWorkerID; i++ {
 		_, ok := keySlice[strconv.Itoa(i)]
 		if !ok {
 			return int64(i), nil
@@ -526,61 +534,36 @@ func (m *mars) watchLeader() {
 }
 
 func (m *mars) initialize() error {
+	// Every instance reserves its number directly in etcd. Asking the leader
+	// for a free number and subsequently doing an unconditional Put races.
+	ctx, cancel := context.WithTimeout(context.Background(), workerRequestTimeout)
+	worker, err := reserveWorker(ctx, etcdWorkerStore{m.etcdCli}, workerKey, m.tcpAddr, m.etcdKeyTimeOut, time.Now)
+	cancel()
+	if err != nil {
+		return errors.Wrap(err, "reserve worker")
+	}
+	m.worker = worker
+	m.workerNum = worker.number
+	m.gen = generator.New(worker.number)
+	go m.keepWorker(context.Background())
+	// Avoid reusing a 53-bit sequence in the previous owner's last second.
+	time.Sleep(time.Until(worker.readyAt))
+	if err := worker.available(); err != nil {
+		return err
+	}
 	b, s, err := m.campaignLeader()
 	m.log.Infof("campaign result: %v, addr:%v", b, s)
 	if err != nil {
 		m.log.Errorf("campaign leader err: %v", err)
 		return err
 	}
-	if b || (!b && s == m.tcpAddr) {
-		num, err := m.getNodeNum()
-		if err != nil {
-			err = errors.Wrap(err, "leader get node num err")
+	m.setLeader(b, s)
+	if !b {
+		if err := m.keepKey(m.getEtcdNodeKey()); err != nil {
 			return err
 		}
-		m.workerNum = num
-		m.log.Infof("generator id:%d", num)
-		m.gen = generator.New(num)
-		err = m.keepKey(workerKey + "/" + strconv.FormatInt(m.workerNum, 10))
-		if err != nil {
-			return err
-		}
-		m.setLeader(b, s)
-		return nil
-	}
-	if !b && s != "" {
-		err := m.keepKey(m.getEtcdNodeKey())
-		if err != nil {
-			return err
-		}
-		client := redis.NewClient(&redis.Options{
-			Addr:     s,
-			Password: m.redisPasswd,
-			DB:       0, // use default DB
-		})
-		num, err := client.Get("node").Result()
-		client.Close()
-		if err != nil {
-			err = errors.Wrap(err, "initialize get node number err")
-			return err
-		}
-		m.log.Infof("get node num from leader:%s", num)
-		parseInt, err := strconv.ParseInt(num, 10, 64)
-		m.log.Infof("generator id:%d", parseInt)
-		m.workerNum = parseInt
-		err = m.keepKey(workerKey + "/" + strconv.FormatInt(m.workerNum, 10))
-		if err != nil {
-			return err
-		}
-		if err != nil {
-			return err
-		}
-		m.gen = generator.New(parseInt)
 		go m.watchLeader()
-		m.setLeader(b, s)
-		return nil
 	}
-
 	return nil
 }
 
